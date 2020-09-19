@@ -18,50 +18,42 @@ SDK_DEFAULT_JAR=$(SDK_JARS_DIR)/launchdarkly-java-server-sdk-$(SDK_VERSION).jar
 SDK_ALL_JAR=$(SDK_JARS_DIR)/launchdarkly-java-server-sdk-$(SDK_VERSION)-all.jar
 SDK_THIN_JAR=$(SDK_JARS_DIR)/launchdarkly-java-server-sdk-$(SDK_VERSION)-thin.jar
 
-TEMP_DIR=$(BASE_DIR)/temp
-TEMP_OUTPUT=$(TEMP_DIR)/test.out
+export TEMP_DIR=$(BASE_DIR)/temp
+export TEMP_OUTPUT=$(TEMP_DIR)/test.out
 
 # Build product of the project in ./test-app; can be run as either a regular app or an OSGi bundle
 TEST_APP_JAR=$(TEMP_DIR)/test-app.jar
-
-# SLF4j implementation - we need to download this separately because it's not in the SDK dependencies
-SLF4J_SIMPLE_JAR=$(TEMP_DIR)/test-slf4j-simple.jar
-SLF4J_SIMPLE_JAR_URL=https://oss.sonatype.org/content/groups/public/org/slf4j/slf4j-simple/1.7.21/slf4j-simple-1.7.21.jar
+TEST_APP_SOURCES=$(shell find $(BASE_DIR)/test-app -name *.java) $(BASE_DIR)/test-app/build.gradle
 
 # Felix OSGi container
-FELIX_ARCHIVE=org.apache.felix.main.distribution-6.0.3.tar.gz
-FELIX_ARCHIVE_URL=http://mirrors.ibiblio.org/apache//felix/$(FELIX_ARCHIVE)
-FELIX_DIR=$(TEMP_DIR)/felix
-FELIX_JAR=$(FELIX_DIR)/bin/felix.jar
-TEMP_BUNDLE_DIR=$(TEMP_DIR)/bundles
+export FELIX_DIR=$(TEMP_DIR)/felix
+export FELIX_JAR=$(FELIX_DIR)/lib/felix.jar
+export FELIX_BASE_BUNDLE_DIR=$(FELIX_DIR)/base-bundles
+export TEMP_BUNDLE_DIR=$(FELIX_DIR)/app-bundles
 
 # Lists of jars to use as a classpath (for the non-OSGi runtime test) or to install as bundles (for
 # the OSGi test). Note that we're assuming that all of the SDK's dependencies have built-in support
 # for OSGi, which is currently true; if that weren't true, we would have to do something different
 # to put them on the system classpath in the OSGi test.
 RUN_JARS_test-all-jar=$(TEST_APP_JAR) $(SDK_ALL_JAR) \
-	$(SLF4J_SIMPLE_JAR)
+	$(shell ls $(TEMP_DIR)/dependencies-external/gson*.jar 2>/dev/null)
 RUN_JARS_test-default-jar=$(TEST_APP_JAR) $(SDK_DEFAULT_JAR) \
-	$(shell ls $(TEMP_DIR)/dependencies-external/*.jar) \
-	$(SLF4J_SIMPLE_JAR)
+	$(shell ls $(TEMP_DIR)/dependencies-external/*.jar 2>/dev/null)
 RUN_JARS_test-thin-jar=$(TEST_APP_JAR) $(SDK_THIN_JAR) \
-	$(shell ls $(TEMP_DIR)/dependencies-internal/*.jar) \
-	$(shell ls $(TEMP_DIR)/dependencies-external/*.jar) \
-	$(SLF4J_SIMPLE_JAR)
-
-# The test-app displays this message on success
-SUCCESS_MESSAGE="@@@ successfully created LD client @@@"
+	$(shell ls $(TEMP_DIR)/dependencies-internal/*.jar 2>/dev/null) \
+	$(shell ls $(TEMP_DIR)/dependencies-external/*.jar 2>/dev/null)
 
 classes_prepare=echo "  checking $(1)..." && jar tf $(1) | grep '\.class$$' >$(TEMP_OUTPUT)
-classes_should_contain=echo "    should contain $(2)" && grep $(1) $(TEMP_OUTPUT) >/dev/null
-classes_should_not_contain=echo "    should not contain $(2)" && ! grep $(1) $(TEMP_OUTPUT) >/dev/null
+classes_should_contain=echo "    should contain $(2)" && grep "^$(1)/[^/]*$$" $(TEMP_OUTPUT) >/dev/null
+classes_should_not_contain=echo "    should not contain $(2)" && ! grep "^$(1)/[^/]*$$" $(TEMP_OUTPUT)
 
 verify_sdk_classes= \
-	$(call classes_should_contain,'^com/launchdarkly/client/[^/]*$$',com.launchdarkly.client) && \
+	$(call classes_should_contain,com/launchdarkly/sdk,com.launchdarkly.sdk) && \
+	$(call classes_should_contain,com/launchdarkly/sdk/json,com.launchdarkly.sdk.json) && \
 	$(foreach subpkg,$(sdk_subpackage_names), \
-		$(call classes_should_contain,'^com/launchdarkly/client/$(subpkg)/',com.launchdarkly.client.$(subpkg)) && ) true
+		$(call classes_should_contain,com/launchdarkly/sdk/$(subpkg),com.launchdarkly.sdk.$(subst /,.,$(subpkg))) && ) true
 sdk_subpackage_names= \
-	$(shell ls -d $(PROJECT_DIR)/src/main/java/com/launchdarkly/client/*/ | sed -e 's@^.*/\([^/]*\)/@\1@')
+	$(shell cd $(PROJECT_DIR)/src/main/java/com/launchdarkly/sdk && find . ! -path . -type d | sed -e 's@^\./@@')
 
 caption=echo "" && echo "$(1)"
 
@@ -69,52 +61,42 @@ all: test-all-jar test-default-jar test-thin-jar
 
 clean:
 	rm -rf $(TEMP_DIR)/*
+	rm -rf test-app/build
 
 # SECONDEXPANSION is needed so we can use "$@" inside a variable in the prerequisite list of the test targets
 .SECONDEXPANSION:
 
-test-all-jar test-default-jar test-thin-jar: $$(RUN_JARS_$$@) $(TEST_APP_JAR) $(FELIX_JAR) get-sdk-dependencies $$@-classes
+test-all-jar test-default-jar test-thin-jar: $$@-classes get-sdk-dependencies $$(RUN_JARS_$$@) $(TEST_APP_JAR) $(FELIX_DIR)
 	@$(call caption,$@)
-	@echo "  non-OSGi runtime test"
-	@java -classpath $(shell echo "$(RUN_JARS_$@)" | sed -e 's/ /:/g') testapp.TestApp | tee $(TEMP_OUTPUT)
-	@grep $(SUCCESS_MESSAGE) $(TEMP_OUTPUT) >/dev/null
-# Can't currently run the OSGi test for the thin jar, because some of our dependencies aren't available as OSGi bundles.
-	@if [ "$@" != "test-thin-jar" ]; then \
-	  echo ""; \
-	  echo "  OSGi runtime test"; \
-	  rm -rf $(TEMP_BUNDLE_DIR); \
-	  mkdir -p $(TEMP_BUNDLE_DIR); \
-	  cp $(RUN_JARS_$@) $(FELIX_DIR)/bundle/*.jar $(TEMP_BUNDLE_DIR); \
-	  rm -rf $(FELIX_DIR)/felix-cache; \
-	  cd $(FELIX_DIR) && echo "sleep 3;exit 0" | java -jar $(FELIX_JAR) -b $(TEMP_BUNDLE_DIR) | tee $(TEMP_OUTPUT); \
-	  grep $(SUCCESS_MESSAGE) $(TEMP_OUTPUT) >/dev/null; \
-	fi
+	@./run-non-osgi-test.sh $(RUN_JARS_$@)
+	@./run-osgi-test.sh $(RUN_JARS_$@)
 
 test-all-jar-classes: $(SDK_ALL_JAR) $(TEMP_DIR)
 	@$(call caption,$@)
 	@$(call classes_prepare,$<)
 	@$(call verify_sdk_classes)
-	@$(call classes_should_contain,'^com/google/gson/',Gson (unshaded))
-	@$(call classes_should_contain,'^org/slf4j/',SLF4j (unshaded))
-	@$(call classes_should_contain,'^com/launchdarkly/shaded/',shaded dependency jars)
-	@$(call classes_should_not_contain,'^com/launchdarkly/shaded/com/launchdarkly/client',shaded SDK classes)
-	@$(call classes_should_not_contain,'^com/launchdarkly/shaded/com/google/gson',shaded Gson)
-	@$(call classes_should_not_contain,'^com/launchdarkly/shaded/org/slf4j',shaded SLF4j)
+	@$(call classes_should_contain,org/slf4j,unshaded SLF4j)
+	@$(call classes_should_not_contain,com/launchdarkly/shaded/com/launchdarkly/sdk,shaded SDK classes)
+	@$(call classes_should_contain,com/launchdarkly/shaded/com/google/gson,shaded Gson)
+	@$(call classes_should_not_contain,com/google/gson,unshaded Gson)
+	@$(call classes_should_not_contain,com/launchdarkly/shaded/org/slf4j,shaded SLF4j)
 
 test-default-jar-classes: $(SDK_DEFAULT_JAR) $(TEMP_DIR)
 	@$(call caption,$@)
 	@$(call classes_prepare,$<)
 	@$(call verify_sdk_classes)
-	@$(call classes_should_contain,'^com/launchdarkly/shaded/',shaded dependency jars)
-	@$(call classes_should_not_contain,'^com/launchdarkly/shaded/com/launchdarkly/client',shaded SDK classes)
-	@$(call classes_should_not_contain,'com/google/gson/',Gson (shaded or unshaded))
-	@$(call classes_should_not_contain,'org/slf4j/',SLF4j (shaded or unshaded))
+	@$(call classes_should_not_contain,com/launchdarkly/shaded/com/launchdarkly/sdk,shaded SDK classes)
+	@$(call classes_should_contain,com/launchdarkly/shaded/com/google/gson,shaded Gson)
+	@$(call classes_should_not_contain,com/launchdarkly/shaded/org/slf4j,shaded SLF4j)
+	@$(call classes_should_not_contain,com/google/gson,unshaded Gson)
+	@$(call classes_should_not_contain,org/slf4j,unshaded SLF4j)
 
 test-thin-jar-classes: $(SDK_THIN_JAR) $(TEMP_DIR)
 	@$(call caption,$@)
 	@$(call classes_prepare,$<)
 	@$(call verify_sdk_classes)
-	@$(call classes_should_not_contain,-v '^com/launchdarkly/client/',anything other than SDK classes)
+	@echo "    should not contain anything other than SDK classes"
+	@! grep -v "^com/launchdarkly/sdk" $(TEMP_OUTPUT)
 
 $(SDK_DEFAULT_JAR):
 	cd .. && ./gradlew shadowJar
@@ -125,7 +107,7 @@ $(SDK_ALL_JAR):
 $(SDK_THIN_JAR):
 	cd .. && ./gradlew jar
 
-$(TEST_APP_JAR): $(SDK_THIN_JAR) | $(TEMP_DIR)
+$(TEST_APP_JAR): $(SDK_THIN_JAR) $(TEST_APP_SOURCES) | $(TEMP_DIR)
 	cd test-app && ../../gradlew jar
 	cp $(BASE_DIR)/test-app/build/libs/test-app-*.jar $@
 
@@ -137,20 +119,29 @@ $(TEMP_DIR)/dependencies-all: | $(TEMP_DIR)
 
 $(TEMP_DIR)/dependencies-external: $(TEMP_DIR)/dependencies-all
 	[ -d $@ ] || mkdir -p $@
-	cp $(TEMP_DIR)/dependencies-all/gson*.jar $(TEMP_DIR)/dependencies-all/slf4j*.jar $@
+	cp $(TEMP_DIR)/dependencies-all/slf4j*.jar $@
+	cp $(TEMP_DIR)/dependencies-all/gson*.jar $@
 
 $(TEMP_DIR)/dependencies-internal: $(TEMP_DIR)/dependencies-all
 	[ -d $@ ] || mkdir -p $@
 	cp $(TEMP_DIR)/dependencies-all/*.jar $@
-	rm $@/gson*.jar $@/slf4j*.jar
+	rm $@/slf4j*.jar
 
-$(SLF4J_SIMPLE_JAR): | $(TEMP_DIR)
-	curl -f -L $(SLF4J_SIMPLE_JAR_URL) >$@
+$(FELIX_JAR): $(FELIX_DIR)
 
-$(FELIX_JAR): | $(TEMP_DIR)
-	curl -f -L $(FELIX_ARCHIVE_URL) >$(TEMP_DIR)/$(FELIX_ARCHIVE)
-	cd $(TEMP_DIR) && tar xfz $(FELIX_ARCHIVE) && rm $(FELIX_ARCHIVE)
-	cd $(TEMP_DIR) && mv `ls -d felix*` felix
+$(FELIX_DIR):
+	mkdir -p $(FELIX_DIR)
+	mkdir -p $(FELIX_DIR)/lib
+	mkdir -p $(FELIX_BASE_BUNDLE_DIR)
+	cd test-app && ../../gradlew createOsgi
+	@# createOsgi is a target provided by the osgi-run Gradle plugin; it downloads the Felix container and
+	@# puts it in build/osgi along with related bundles and a config file.
+	cp -r test-app/build/osgi/conf $(FELIX_DIR)
+	echo "felix.shutdown.hook=false" >>$(FELIX_DIR)/conf/config.properties
+	@# setting felix.shutdown.hook to false allows our test app to use System.exit()
+	cp test-app/build/osgi/system-libs/org.apache.felix.main-*.jar $(FELIX_JAR)
+	cp test-app/build/osgi/bundle/* $(FELIX_BASE_BUNDLE_DIR)
+	cd $(FELIX_BASE_BUNDLE_DIR) && rm -f launchdarkly-*.jar gson-*.jar
 
 $(TEMP_DIR):
 	[ -d $@ ] || mkdir -p $@

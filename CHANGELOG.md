@@ -2,12 +2,171 @@
 
 All notable changes to the LaunchDarkly Java SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [5.1.0] - 2020-09-04
+### Added:
+- The `TestData` class in `com.launchdarkly.sdk.server.integrations` is a new way to inject feature flag data programmatically into the SDK for testing—either with fixed values for each flag, or with targets and/or rules that can return different values for different users. Unlike `FileData`, this mechanism does not use any external resources, only the data that your test code has provided.
+
+### Fixed:
+- In polling mode, the log message &#34;LaunchDarkly client initialized&#34; was appearing after every successful poll request. It should only appear once.
+
+## [5.0.5] - 2020-09-03
+### Fixed:
+- Bump SnakeYAML from 1.19 to 1.26 to address CVE-2017-18640. The SDK only parses YAML if the application has configured the SDK with a flag data file, so it&#39;s unlikely this CVE would affect SDK usage as it would require configuration and access to a local file.
+
+
+## [5.0.4] - 2020-09-01
+### Fixed:
+- Updated the version of OkHttp contained within the SDK from 4.5.0 to 4.8.1, to address multiple [known issues](https://square.github.io/okhttp/changelog/) including an incompatibility with OpenJDK 8.0.252 under some conditions. ([#204](https://github.com/launchdarkly/java-server-sdk/issues/204))
+
+## [5.0.3] - 2020-08-18
+### Fixed:
+- A packaging issue with Kotlin dependencies caused problems with IntelliJ code completion and code highlighting. ([#201](https://github.com/launchdarkly/java-server-sdk/issues/201))
+
+## [5.0.2] - 2020-06-25
+### Changed:
+- It is no longer necessary to set `StreamingDataSourceBuilder.pollingBaseURI` if you are also setting `baseURI`. This is due to a change in how the LaunchDarkly streaming service works. The setter method still exists, but no longer has any effect and will be deprecated in a future release.
+
+### Fixed:
+- In polling mode, if a poll request failed due to a temporary network problem but then a subsequent request succeeded, `DataSourceStatusProvider` was continuing to report the status as `INTERRUPTED` when it should have been restored to `VALID`.
+- In polling mode, the SDK was unnecessarily re-storing the flag data in the data store even if it had not changed since the last poll request. This would cause unnecessary updates when using a database.
+- In polling mode, temporary files used for HTTP caching (in the system temporary directory) were not being cleaned up when the client was closed.
+- Fixed incorrect sample code in the documentation comment for `FlagValueChangeListener`.
+
+## [5.0.1] - 2020-06-19
+### Fixed:
+- Fixed a bug that could cause worker threads for the EventSource stream to persist after closing the client, if the client had shut down the stream due to detecting an invalid SDK key.
+
+## [5.0.0] - 2020-06-02
+This is a major rewrite that introduces a cleaner API design, adds new features, and makes the SDK code easier to maintain and extend. See the [Java 4.x to 5.0 migration guide](https://docs.launchdarkly.com/sdk/server-side/java/migration-4-to-5) for an in-depth look at the changes in this version; the following is a summary.
+ 
+(For early adopters who have used the the 5.0.0-rc2 beta release: some things have changed between 5.0.0-rc2 and this full release. The [5.0.0-rc2 release notes](https://github.com/launchdarkly/java-server-sdk/releases/tag/5.0.0-rc2) have been updated with a section describing these changes.)
+ 
+### Added:
+- You can tell the SDK to notify you whenever a feature flag&#39;s configuration has changed (either in general, or in terms of its result for a specific user), using `LDClient.getFlagTracker()`. ([#83](https://github.com/launchdarkly/java-server-sdk/issues/83))
+- You can monitor the status of the SDK&#39;s data source (which normally means the streaming connection to the LaunchDarkly service) with `LDClient.getDataSourceStatusProvider()`. This allows you to check the current connection status, and to be notified if this status changes. ([#184](https://github.com/launchdarkly/java-server-sdk/issues/184))
+- You can monitor the status of a persistent data store with `LDClient.getDataStoreStatusProvider()`. This allows you to check whether database updates are succeeding, to be notified if this status changes, and to get caching statistics.
+- The `FileData` tool now supports reading flag data from a classpath resource as if it were a data file. See `FileDataSourceBuilder.classpathResources()`. ([#193](https://github.com/launchdarkly/java-server-sdk/issues/193))
+- `LDConfig.Builder.logging()` is a new configuration category for options related to logging. Currently the only such option is `escalateDataSourceOutageLoggingAfter`, which controls the new connection failure logging behavior described below.
+- `LDConfig.Builder.threadPriority()` allows you to set the priority for worker threads created by the SDK.
+- The `UserAttribute` class provides a less error-prone way to refer to user attribute names in configuration, and can also be used to get an arbitrary attribute from a user.
+- The `LDGson` and `LDJackson` classes allow SDK classes like `LDUser` to be easily converted to or from JSON using the popular Gson and Jackson frameworks.
+ 
+### Changed (requirements/dependencies/build):
+- The minimum supported Java version is now 8.
+- The SDK no longer exposes a Gson dependency or any Gson types.
+- Third-party libraries like Gson, Guava, and OkHttp that are used internally by the SDK have been updated to newer versions since Java 7 compatibility is no longer required. ([#158](https://github.com/launchdarkly/java-server-sdk/issues/158))
+- Code coverage reports and JMH benchmarks are now generated in every build. Unit test coverage of the entire SDK codebase has been greatly improved.
+ 
+### Changed (API changes):
+- Package names have changed: the main SDK classes are now in `com.launchdarkly.sdk` and `com.launchdarkly.sdk.server`.
+- Many rarely-used classes and interfaces have been moved out of the main SDK package into `com.launchdarkly.sdk.server.integrations` and `com.launchdarkly.sdk.server.interfaces`.
+- The type `java.time.Duration` is now used for configuration properties that represent an amount of time, instead of using a number of milliseconds or seconds.
+- `LDClient.initialized()` has been renamed to `isInitialized()`.
+- `LDClient.intVariation()` and `doubleVariation()` now return `int` and `double`, not the nullable `Integer` and `Double`.
+- `EvaluationDetail.getVariationIndex()` now returns `int` instead of `Integer`.
+- `EvaluationReason` is now a single concrete class rather than an abstract base class.
+- The component interfaces `FeatureStore` and `UpdateProcessor` have been renamed to `DataStore` and `DataSource`. The factory interfaces for these components now receive SDK configuration options in a different way that does not expose other components&#39; configurations to each other.
+- The `PersistentDataStore` interface for creating your own database integrations has been simplified by moving all of the serialization and caching logic into the main SDK code.
+ 
+### Changed (behavioral changes):
+- SLF4J logging now uses a simpler, more stable set of logger names instead of using the names of specific implementation classes that are subject to change. General messages are logged under `com.launchdarkly.sdk.server.LDClient`, while messages about specific areas of functionality are logged under that name plus `.DataSource` (streaming, polling, file data, etc.), `.DataStore` (database integrations), `.Evaluation` (unexpected errors during flag evaluations), or `.Events` (analytics event processing).
+- If analytics events are disabled with `Components.noEvents()`, the SDK now avoids generating any analytics event objects internally. Previously they were created and then discarded, causing unnecessary heap churn.
+- Network failures and server errors for streaming or polling requests were previously logged at `ERROR` level in most cases but sometimes at `WARN` level. They are now all at `WARN` level, but with a new behavior: if connection failures continue without a successful retry for a certain amount of time, the SDK will log a special `ERROR`-level message to warn you that this is not just a brief outage. The amount of time is one minute by default, but can be changed with the new `logDataSourceOutageAsErrorAfter` option in `LoggingConfigurationBuilder`. ([#190](https://github.com/launchdarkly/java-server-sdk/issues/190))
+- Many internal methods have been rewritten to reduce the number of heap allocations in general.
+- Evaluation of rules involving regex matches, date/time values, and semantic versions, has been speeded up by pre-parsing the values in the rules.
+- Evaluation of rules involving an equality match to multiple values (such as &#34;name is one of X, Y, Z&#34;) has been speeded up by converting the list of values to a `Set`.
+- The number of worker threads maintained by the SDK has been reduced so that most intermittent background tasks, such as listener notifications, event flush timers, and polling requests, are now dispatched on a single thread. The delivery of analytics events to LaunchDarkly still has its own thread pool because it is a heavier-weight task with greater need for concurrency.
+- In polling mode, the poll requests previously ran on a dedicated worker thread that inherited its priority from the application thread that created the SDK. They are now on the SDK&#39;s main worker thread, which has `Thread.MIN_PRIORITY` by default (as all the other SDK threads already did) but the priority can be changed as described above.
+- When using a persistent data store such as Redis, if there is a database outage, the SDK will wait until the end of the outage and then restart the stream connection to ensure that it has the latest data. Previously, it would try to restart the connection immediately and continue restarting if the database was still not available, causing unnecessary overhead.
+ 
+### Fixed:
+- `LDClient.version()` previously could not be used if the SDK classes were not packaged in their original jar. It now works correctly regardless of deployment details.
+ 
+### Removed:
+- All types and methods that were deprecated as of Java SDK 4.13.0 have been removed. This includes many `LDConfig.Builder()` methods, which have been replaced by the modular configuration syntax that was already added in the 4.12.0 and 4.13.0 releases. See the [migration guide](https://docs.launchdarkly.com/sdk/server-side/java/migration-4-to-5) for details on how to update your configuration code if you were using the older syntax.
+- The Redis integration is no longer built into the main SDK library. See: https://github.com/launchdarkly/java-server-sdk-redis
+- The deprecated New Relic integration has been removed.
+
+## [4.14.3] - 2020-09-03
+### Fixed:
+- Bump SnakeYAML from 1.19 to 1.26 to address CVE-2017-18640. The SDK only parses YAML if the application has configured the SDK with a flag data file, so it&#39;s unlikely this CVE would affect SDK usage as it would require configuration and access to a local file.
+
+## [4.14.2] - 2020-09-01
+### Fixed:
+- Updated the version of OkHttp contained within the SDK from 3.12.10 to 3.14.9, to address multiple [known issues](https://square.github.io/okhttp/changelog_3x/) including an incompatibility with OpenJDK 8.0.252 under some conditions. ([#204](https://github.com/launchdarkly/java-server-sdk/issues/204))
+
+## [4.14.1] - 2020-08-04
+### Fixed:
+- Deserializing `LDUser` from JSON using Gson resulted in an object that had nulls in some fields where nulls were not expected, which could cause null pointer exceptions later. While there was no defined behavior for deserializing users in the 4.x SDK (it is supported in 5.0 and above), it was simple to fix. Results of deserializing with any other JSON framework are undefined. ([#199](https://github.com/launchdarkly/java-server-sdk/issues/199))
+
+## [4.14.0] - 2020-05-13
+### Added:
+- `EventSender` interface and `EventsConfigurationBuilder.eventSender()` allow you to specify a custom implementation of how event data is sent. This is mainly to facilitate testing, but could also be used to store and forward event data.
+
+### Fixed:
+- Changed the Javadoc comments for the `LDClient` constructors to provide a better explanation of the client&#39;s initialization behavior.
+
+## [4.13.0] - 2020-04-21
+### Added:
+- The new methods `Components.httpConfiguration()` and `LDConfig.Builder.http()`, and the new class `HttpConfigurationBuilder`, provide a subcomponent configuration model that groups together HTTP-related options such as `connectTimeoutMillis` and `proxyHost` - similar to how `Components.streamingDataSource()` works for streaming-related options or `Components.sendEvents()` for event-related options. The individual `LDConfig.Builder` methods for those options will still work, but are deprecated and will be removed in version 5.0.
+- `EvaluationReason` now has getter methods like `getRuleIndex()` that were previously only on specific reason subclasses. The subclasses will be removed in version 5.0.
+
+### Changed:
+- In streaming mode, the SDK will now drop and restart the stream connection if either 1. it receives malformed data (indicating that some data may have been lost before reaching the application) or 2. you are using a database integration (a persistent feature store) and a database error happens while trying to store the received data. In both cases, the intention is to make sure updates from LaunchDarkly are not lost; restarting the connection causes LaunchDarkly to re-send the entire flag data set. This makes the Java SDK&#39;s behavior consistent with other LaunchDarkly server-side SDKs.
+
+(Note that this means if there is a sustained database outage, you may see repeated reconnections as the SDK receives the data from LaunchDarkly again, tries to store it again, and gets another database error. Starting in version 5.0, there will be a more efficient mechanism in which the stream will only be restarted once the database becomes available again; that is not possible in this version because of limitations in the feature store interface.)
+
+### Fixed:
+- Network errors during analytics event delivery could cause an unwanted large exception stacktrace to appear as part of the log message. This has been fixed to be consistent with the SDK&#39;s error handling in general: a brief message is logged at `ERROR` or `WARN` level, and the stacktrace only appears if you have enabled `DEBUG` level.
+
+### Deprecated:
+- `LDConfig.Builder` methods `connectTimeout`, `connectTimeoutMillis`, `proxyHost`, `proxyPort`, `proxyUsername`, `proxyPassword`, `sslSocketFactory`, `wrapperName`, and `wrapperVersion`. Use `LDConfig.Builder.http()` and `Components.httpConfiguration()` instead.
+- `EvaluationReason` subclasses. Use the property getter methods on `EvaluationReason` instead.
+- The built-in New Relic integration will be removed in the 5.0 release. Application code is not affected by this change since the integration was entirely reflection-based and was not exposed in the public API.
+
+## [4.12.1] - 2020-03-20
+### Changed:
+- Improved the performance of the in-memory flag data store by using an immutable map that is atomically replaced on updates, so reads do not need a lock.
+- Improved the performance of flag evaluations when there is a very long user target list in a feature flag or user segment, by representing the user key collection as a Set rather than a List.
+- Updated OkHttp version to 3.12.10 (the latest version that still supports Java 7).
+
+
+## [4.12.0] - 2020-01-30
+The primary purpose of this release is to introduce newer APIs for the existing SDK features, corresponding to how they will work in the upcoming 5.0 release. The corresponding older APIs are now deprecated; switching from them to the newer ones now will facilitate migrating to 5.0 in the future. See below for details.
+
+This release also adds diagnostic reporting as described below.
+
+Note: if you are using the LaunchDarkly Relay Proxy to forward events, update the Relay to version 5.10.0 or later before updating to this Java SDK version.
+
+### Added:
+- The SDK now periodically sends diagnostic data to LaunchDarkly, describing the version and configuration of the SDK, the architecture and version of the runtime platform, and performance statistics. No credentials, hostnames, or other identifiable values are included. This behavior can be disabled with `LDConfig.Builder.diagnosticOptOut()` or configured with `EventProcessorBuilder.diagnosticRecordingInterval()`.
+- Previously, most configuration options were set by setter methods in `LDConfig.Builder`. These are being superseded by builders that are specific to one area of functionality: for instance, `Components.streamingDataSource()` and `Components.pollingDataSource()` provide builders/factories that have options specific to streaming or polling, and the SDK's many options related to analytics events are now in a builder returned by `Components.sendEvents()`. Using this newer API makes it clearer which options are for what, and makes it impossible to write contradictory configurations like `.stream(true).pollingIntervalMillis(30000)`.
+- The component "feature store" will be renamed to "data store". The interface for this is still called `FeatureStore` for backward compatibility, but `LDConfig.Builder` now has a `dataStore` method.
+- There is a new API for specifying a _persistent_ data store (usually a database integration). This is now done using the new method `Components.persistentDataStore` and one of the new integration factories in the new package `com.launchdarkly.client.integrations`. The `Redis` class in that package provides the Redis integration; the next releases of the Consul and DynamoDB integrations will use the same semantics.
+- The component "update processor" will be renamed to "data source". Applications normally do not need to use this interface except for the "file data source" testing component; the new entry point for this is `FileData` in `com.launchdarkly.client.integrations`.
+- It is now possible to specify an infinite cache TTL for persistent feature stores by setting the TTL to a negative number, in which case the persistent store will never be read unless the application restarts. Use this mode with caution as described in the comment for `PersistentDataStoreBuilder.cacheForever()`.
+- New `LDConfig.Builder` setters `wrapperName()` and `wrapperVersion()` allow a library that uses the Java SDK to identify itself for usage data if desired.
+
+### Fixed:
+- The Redis integration could fail to connect to Redis if the application did not explicitly specify a Redis URI. This has been fixed so it will default to `redis://localhost:6379` as documented.
+- The `getCacheStats()` method on the deprecated `RedisFeatureStore` class was not working (the statistics were always zero). Note that in the newer persistent store API added in this version, there is now a different way to get cache statistics.
+
+### Deprecated:
+- Many `LDConfig.Builder` methods: see notes under "Added", and the per-method notes in Javadoc.
+- `RedisFeatureStore` and `RedisFeatureStoreBuilder` in `com.launchdarkly.client`: see `Redis` in `com.launchdarkly.client.integrations`.
+- `FileComponents` in `com.launchdarkly.client.files`: see `FileData` in `com.launchdarkly.client.integrations`.
+- `FeatureStoreCacheConfig`: see `PersistentDataStoreBuilder`.
+
+
+## [4.11.1] - 2020-01-17
+### Fixed:
+- Flag evaluation would fail (with a NullPointerException that would be logged, but not thrown to the caller) if a flag rule used a semantic version operator and the specified user attribute did not have a string value.
+- The recently-added exception property of `EvaluationReason.Error` should not be serialized to JSON when sending reasons in analytics events, since the LaunchDarkly events service does not process that field and the serialization of an exception can be lengthy. The property is only meant for programmatic use.
+- The SDK now specifies a uniquely identifiable request header when sending events to LaunchDarkly to ensure that events are only processed once, even if the SDK sends them two times due to a failed initial attempt. _(An earlier release note incorrectly stated that this behavior was added in 4.11.0. It is new in this release.)_
+
 ## [4.11.0] - 2020-01-16
 ### Added:
 - When an `EvaluationReason` indicates that flag evaluation failed due to an unexpected exception (`getKind()` is `ERROR`, and `EvaluationReason.Error.getErrorKind()` is `EXCEPTION`), you can now examine the underlying exception via `EvaluationReason.Error.getException()`. ([#180](https://github.com/launchdarkly/java-server-sdk/issues/180))
-
-### Fixed:
-- The SDK now specifies a uniquely identifiable request header when sending events to LaunchDarkly to ensure that events are only processed once, even if the SDK sends them two times due to a failed initial attempt.
 
 ## [4.10.1] - 2020-01-06
 ### Fixed:
